@@ -1,0 +1,14 @@
+services:
+  labpilot:
+    image: ghcr.io/zoleary/labpilot:latest
+    build: .
+    container_name: labpilot
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - labpilot-data:/data
+
+volumes:
+  labpilot-data:
