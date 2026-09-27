@@ -1,6 +1,6 @@
 services:
   labpilot:
-    image: ghcr.io/zoleary/labpilot:latest
+    image: ghcr.io/zoleary/prox-mgmt:latest
     build: .
     container_name: labpilot
     restart: unless-stopped

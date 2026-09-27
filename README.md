@@ -25,8 +25,8 @@ Docker runs best in a small VM (1–2 vCPU, 1 GiB RAM). To use an LXC container 
 ```bash
 apt update && apt install -y curl && curl -fsSL https://get.docker.com | sh
 mkdir -p /opt/labpilot && cd /opt/labpilot
-curl -O https://raw.githubusercontent.com/zoleary/labpilot/main/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/zoleary/labpilot/main/.env.example   # then edit .env
+curl -O https://raw.githubusercontent.com/zoleary/prox-mgmt/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/zoleary/prox-mgmt/main/.env.example   # then edit .env
 docker compose up -d
 ```
 
@@ -118,4 +118,4 @@ Integrations worth adding next: Proxmox Backup Server (backup age per guest), Un
 
 ## Publishing the image
 
-`.github/workflows/docker.yml` runs the tests and pushes `ghcr.io/<owner>/labpilot` for amd64 and arm64 on every push to `main` and on `v*` tags. If the package is private, make it public in the package settings or run `docker login ghcr.io` on the host first.
+`.github/workflows/docker.yml` runs the tests and pushes `ghcr.io/zoleary/prox-mgmt` for amd64 and arm64 on every push to `main` and on `v*` tags. If the package is private, make it public in the package settings or run `docker login ghcr.io` on the host first.
