@@ -132,6 +132,44 @@ def exec_alias(state, r):
     return str(_integration(state, "pfsense").add_to_alias(r["alias"], r["address"]))
 
 
+def _pf_item(state, collection, key, value, what):
+    for item in state.raw.get("pfsense", {}).get(collection, []):
+        if str(item.get(key)) == str(value).strip():
+            return item
+    raise ValueError(f"no {what} with {key} {value!r} (refresh if it was just added)")
+
+
+def _enabled(p):
+    if not isinstance(p.get("enabled"), bool):
+        raise ValueError("enabled must be true or false")
+    return p["enabled"]
+
+
+def prep_rule_toggle(state, p):
+    _integration(state, "pfsense")
+    enabled = _enabled(p)
+    r = _pf_item(state, "rules", "tracker", p["tracker"], "firewall rule")
+    label = r.get("descr") or f"{r.get('type')} {r.get('source')} -> {r.get('destination')}"
+    return {"tracker": r["tracker"], "enabled": enabled}, \
+        f"{'Enable' if enabled else 'Disable'} pfSense rule on {r.get('interface')}: {label} and apply"
+
+
+def exec_rule_toggle(state, r):
+    return str(_integration(state, "pfsense").set_rule_disabled(r["tracker"], not r["enabled"]))
+
+
+def prep_tunnel_toggle(state, p):
+    _integration(state, "pfsense")
+    enabled = _enabled(p)
+    t = _pf_item(state, "tunnels", "ikeid", p["ikeid"], "IPsec tunnel")
+    return {"ikeid": t["ikeid"], "enabled": enabled}, \
+        f"{'Enable' if enabled else 'Disable'} IPsec tunnel {t.get('descr') or t['ikeid']} ({t.get('remote_gateway')}) and apply"
+
+
+def exec_tunnel_toggle(state, r):
+    return str(_integration(state, "pfsense").set_tunnel_disabled(r["ikeid"], not r["enabled"]))
+
+
 ACTIONS = {
     "guest_power": (prep_power, exec_power),
     "set_guest_memory": (prep_memory, exec_memory),
@@ -140,7 +178,12 @@ ACTIONS = {
     "add_dns_record": (prep_dns_add, exec_dns_add),
     "remove_dns_record": (prep_dns_remove, exec_dns_remove),
     "add_to_firewall_alias": (prep_alias, exec_alias),
+    "set_firewall_rule_enabled": (prep_rule_toggle, exec_rule_toggle),
+    "set_ipsec_tunnel_enabled": (prep_tunnel_toggle, exec_tunnel_toggle),
 }
+
+# Actions the dashboard buttons may run directly (the user clicks, then confirms in the browser).
+DIRECT = {"guest_power", "set_firewall_rule_enabled", "set_ipsec_tunnel_enabled"}
 
 
 def propose(state, db, tool: str, params: dict) -> dict:

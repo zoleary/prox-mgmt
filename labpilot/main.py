@@ -153,6 +153,25 @@ async def approve(action_id: int):
     return result
 
 
+class DoIn(BaseModel):
+    tool: str
+    params: dict
+
+
+@api.post("/do")
+async def do(body: DoIn):
+    """Run a change from a dashboard button. It is still logged in the change history."""
+    if body.tool not in actions.DIRECT:
+        raise HTTPException(400, f"{body.tool} can't be run directly")
+    try:
+        proposed = actions.propose(state, db, body.tool, body.params)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e))
+    result = await asyncio.to_thread(actions.approve, state, db, proposed["id"])
+    await asyncio.to_thread(state.refresh)
+    return result
+
+
 @api.post("/actions/{action_id}/reject")
 def reject(action_id: int):
     try:

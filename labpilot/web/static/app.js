@@ -107,10 +107,29 @@ renderers.guests = async () => {
       <td>${g.maxcpu}</td><td>${gib(g.maxmem)}${g.ballooning && g.balloon_min < g.maxmem ? ` <span class="muted">(min ${gib(g.balloon_min)})</span>` : ""}</td>
       <td>${g.status === "running" ? gib(g.mem) : ""}</td>
       <td class="mono">${esc(ips.join(", "))}</td><td>${esc(vlans.join(", "))}</td>
-      <td>${g.type === "qemu" ? (g.agent_enabled ? '<span class="ok">yes</span>' : '<span class="warning">no</span>') : ""}</td></tr>`;
+      <td>${g.type === "qemu" ? (g.agent_enabled ? '<span class="ok">yes</span>' : '<span class="warning">no</span>') : ""}</td>
+      <td class="nowrap">${powerButtons(g)}</td></tr>`;
   }).join("");
   $("#guests").innerHTML = `<input class="filter" placeholder="Filter guests…" oninput="filterRows(this, '#guests')">
-    <table><tr><th>ID</th><th>Name</th><th>Type</th><th>Node</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Using</th><th>IPs</th><th>VLAN</th><th>Agent</th></tr>${rows}</table>`;
+    <table><tr><th>ID</th><th>Name</th><th>Type</th><th>Node</th><th>Status</th><th>vCPU</th><th>Memory</th><th>Using</th><th>IPs</th><th>VLAN</th><th>Agent</th><th></th></tr>${rows}</table>`;
+};
+
+function powerButtons(g) {
+  const acts = g.status === "running" ? ["shutdown", "reboot", "stop"] : ["start"];
+  return acts.map((a) => `<button class="small ${a === "stop" ? "danger" : ""}" title="${a === "stop" ? "Hard stop (like pulling the plug)" : a === "shutdown" ? "Graceful shutdown" : ""}"
+    onclick="doAction('guest_power', {guest: '${g.vmid}', action: '${a}'}, '${a[0].toUpperCase() + a.slice(1)} ${g.type === "qemu" ? "VM" : "CT"} ${g.vmid} ${esc(String(g.name ?? "").replace(/['\\]/g, ""))}?')">${a}</button>`).join(" ");
+}
+
+window.doAction = async (tool, params, question) => {
+  if (!confirm(question)) return;
+  document.querySelectorAll("main button").forEach((b) => (b.disabled = true));
+  try {
+    const a = await api("/do", { method: "POST", body: JSON.stringify({ tool, params }) });
+    addMsg("bot", `${a.summary}: ${a.status}${a.result ? " (" + a.result + ")" : ""}`);
+  } catch (e) {
+    addMsg("bot", "Failed: " + e.message);
+  }
+  render(current());
 };
 
 window.filterRows = (input, scope) => {
@@ -170,11 +189,19 @@ renderers.firewall = async () => {
   if (!pf.system) { $("#firewall").innerHTML = '<div class="muted">pfSense not connected.</div>'; return; }
   const ifaces = (pf.interfaces || []).map((i) => `<tr><td>${esc(i.descr || i.name)}</td><td>${esc(i.status)}</td><td class="mono">${esc(i.ipaddr)}/${esc(i.subnet)}</td><td class="mono">${esc(i.macaddr)}</td></tr>`).join("");
   const aliases = (pf.aliases || []).map((a) => `<tr><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td class="mono">${esc((a.address || []).join(", "))}</td><td>${esc(a.descr)}</td></tr>`).join("");
-  const rules = (pf.rules || []).map((r) => `<tr class="${r.disabled ? "muted" : ""}" data-q="${esc(JSON.stringify(r).toLowerCase())}"><td>${esc(r.interface)}</td><td class="${r.type === "pass" ? "ok" : "critical"}">${esc(r.type)}</td><td>${esc(r.protocol || "any")}</td><td class="mono">${esc(r.source)}</td><td class="mono">${esc(r.destination)}${r.destination_port ? ":" + esc(r.destination_port) : ""}</td><td>${esc(r.descr)}</td></tr>`).join("");
+  const q = (v) => esc(String(v ?? "").replace(/['\\]/g, ""));
+  const toggle = (tool, params, enabled, label) => `<button class="small ${enabled ? "danger" : "approve"}"
+    onclick="doAction('${tool}', ${esc(JSON.stringify(params))}, '${enabled ? "Disable" : "Enable"} ${q(label)} and apply?')">${enabled ? "Disable" : "Enable"}</button>`;
+  const rules = (pf.rules || []).map((r) => `<tr class="${r.disabled ? "muted" : ""}" data-q="${esc(JSON.stringify(r).toLowerCase())}"><td>${esc(r.interface)}</td><td class="${r.type === "pass" ? "ok" : "critical"}">${esc(r.type)}</td><td>${esc(r.protocol || "any")}</td><td class="mono">${esc(r.source)}</td><td class="mono">${esc(r.destination)}${r.destination_port ? ":" + esc(r.destination_port) : ""}</td><td>${esc(r.descr)}${r.disabled ? ' <span class="pill">disabled</span>' : ""}</td>
+    <td>${r.tracker ? toggle("set_firewall_rule_enabled", { tracker: String(r.tracker), enabled: !!r.disabled }, !r.disabled, "rule " + (r.descr || r.tracker)) : ""}</td></tr>`).join("");
+  const tunnels = (pf.tunnels || []).map((t) => `<tr class="${t.disabled ? "muted" : ""}"><td class="mono">${esc(t.ikeid)}</td><td>${esc(t.descr)}</td><td class="mono">${esc(t.remote_gateway)}</td>
+    <td class="${t.disabled ? "muted" : /establish|install/i.test(t.state) ? "ok" : "warning"}">${t.disabled ? "disabled" : esc(t.state)}</td>
+    <td>${toggle("set_ipsec_tunnel_enabled", { ikeid: String(t.ikeid), enabled: !!t.disabled }, !t.disabled, "IPsec tunnel " + (t.descr || t.ikeid))}</td></tr>`).join("");
   $("#firewall").innerHTML = `<h2>Interfaces</h2><table><tr><th>Name</th><th>Status</th><th>Address</th><th>MAC</th></tr>${ifaces}</table>
+    <h2>IPsec tunnels</h2>${tunnels ? `<table><tr><th>ID</th><th>Description</th><th>Remote gateway</th><th>State</th><th></th></tr>${tunnels}</table>` : '<div class="muted">No IPsec tunnels.</div>'}
     <h2>Aliases</h2><table><tr><th>Name</th><th>Type</th><th>Entries</th><th>Description</th></tr>${aliases}</table>
     <h2>Rules</h2><input class="filter" placeholder="Filter rules…" oninput="filterRows(this, '#firewall')">
-    <table><tr><th>Interface</th><th>Action</th><th>Proto</th><th>Source</th><th>Destination</th><th>Description</th></tr>${rules}</table>`;
+    <table><tr><th>Interface</th><th>Action</th><th>Proto</th><th>Source</th><th>Destination</th><th>Description</th><th></th></tr>${rules}</table>`;
 };
 
 // ---------- change queue ----------

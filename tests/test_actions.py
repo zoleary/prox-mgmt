@@ -87,3 +87,68 @@ def test_parse_proxmox_nics():
                   "ip": "10.0.20.15", "dhcp": False}]
     l = lxc_nics({"net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=dhcp,tag=30"})
     assert l[0]["dhcp"] and l[0]["ip"] is None and l[0]["vlan"] == "30"
+
+
+class FakePfSense:
+    name = "pfsense"
+
+    def __init__(self):
+        self.calls = []
+
+    def configured(self):
+        return True
+
+    def set_rule_disabled(self, tracker, disabled):
+        self.calls.append(("rule", tracker, disabled))
+        return {"changed": True}
+
+    def set_tunnel_disabled(self, ikeid, disabled):
+        self.calls.append(("tunnel", ikeid, disabled))
+        return {"changed": True}
+
+
+@pytest.fixture
+def pf_env(env):
+    state, db = env
+    state.integrations["pfsense"] = FakePfSense()
+    state.raw = {"pfsense": {
+        "rules": [{"tracker": 1700000001, "interface": "lan", "type": "pass", "descr": "LAN to any", "disabled": False}],
+        "tunnels": [{"ikeid": 1, "descr": "Office", "remote_gateway": "203.0.113.5", "disabled": True, "state": "down"}],
+    }}
+    return state, db
+
+
+def test_disable_firewall_rule(pf_env):
+    state, db = pf_env
+    p = actions.propose(state, db, "set_firewall_rule_enabled", {"tracker": "1700000001", "enabled": False})
+    assert "Disable" in p["summary"] and "LAN to any" in p["summary"]
+    assert actions.approve(state, db, p["id"])["status"] == "done"
+    assert state.integrations["pfsense"].calls == [("rule", 1700000001, True)]
+
+
+def test_enable_ipsec_tunnel(pf_env):
+    state, db = pf_env
+    p = actions.propose(state, db, "set_ipsec_tunnel_enabled", {"ikeid": "1", "enabled": True})
+    assert "Office" in p["summary"]
+    actions.approve(state, db, p["id"])
+    assert state.integrations["pfsense"].calls == [("tunnel", 1, False)]
+
+
+@pytest.mark.parametrize("tool,params", [
+    ("set_firewall_rule_enabled", {"tracker": "999", "enabled": False}),
+    ("set_firewall_rule_enabled", {"tracker": "1700000001", "enabled": "no"}),
+    ("set_ipsec_tunnel_enabled", {"ikeid": "7", "enabled": True}),
+])
+def test_invalid_pfsense_toggles(pf_env, tool, params):
+    state, db = pf_env
+    with pytest.raises(ValueError):
+        actions.propose(state, db, tool, params)
+
+
+def test_ipsec_tunnel_state():
+    from labpilot.integrations.pfsense import ipsec_tunnels
+    t = ipsec_tunnels([{"ikeid": 2, "descr": "DC", "remote_gateway": "198.51.100.1", "disabled": False},
+                       {"ikeid": 3, "descr": "Old", "remote_gateway": "198.51.100.2", "disabled": True}],
+                      [{"con_id": "con2", "state": "ESTABLISHED"}])
+    assert [x["state"] for x in t] == ["ESTABLISHED", "down"]
+    assert t[1]["disabled"] is True

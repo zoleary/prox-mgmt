@@ -21,12 +21,13 @@ pfSense as the firewall/router with VLANs, and Windows Server providing DHCP and
 Answer from the tools, not from assumptions. Data is refreshed about once a minute.
 
 Changes: tools that change something (power, memory, snapshots, DHCP reservations, DNS records, \
-firewall aliases) do NOT run immediately. They queue a proposal that the user must approve in the \
+firewall aliases, firewall rules, IPsec tunnels) do NOT run immediately. They queue a proposal that the user must approve in the \
 UI. After proposing, tell the user what you queued and that it's waiting for their approval. Never \
 say a change is done unless a later message confirms it.
 
 Before proposing a change, check it makes sense: for a new VM or static IP, use find_free_ips and \
-check_memory_fit; before adding DNS, check the IP isn't already used by something else. If a request \
+check_memory_fit; before adding DNS, check the IP isn't already used by something else. \
+Disabling a rule or tunnel can cut off access, including the user's own; call that out. If a request \
 is risky (stopping a node's critical VM, a big overcommit), say so plainly.
 
 Keep answers short. Use GiB for memory. Use tables only when comparing several items."""
@@ -60,8 +61,10 @@ READ_TOOLS = [
      "input_schema": _obj({"search": {"type": "string"}}, [])},
     {"name": "pfsense_status", "description": "pfSense system status, interfaces, VLANs, gateways and aliases.",
      "input_schema": _obj({}, [])},
-    {"name": "firewall_rules", "description": "pfSense firewall rules, optionally for one interface.",
+    {"name": "firewall_rules", "description": "pfSense firewall rules (with their tracker id), optionally for one interface.",
      "input_schema": _obj({"interface": {"type": "string"}}, [])},
+    {"name": "ipsec_tunnels", "description": "pfSense IPsec phase 1 tunnels: ikeid, description, remote gateway, enabled, live state.",
+     "input_schema": _obj({}, [])},
 ]
 
 WRITE_TOOLS = [
@@ -138,6 +141,8 @@ def run_read_tool(state, name: str, p: dict):
     if name == "firewall_rules":
         rules = raw.get("pfsense", {}).get("rules", [])
         return [r for r in rules if not p.get("interface") or r.get("interface") == p["interface"]]
+    if name == "ipsec_tunnels":
+        return raw.get("pfsense", {}).get("tunnels", [])
     raise ValueError(f"unknown tool {name}")
 
 
