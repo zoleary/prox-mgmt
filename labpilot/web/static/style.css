@@ -51,6 +51,10 @@ input.filter { background: var(--panel2); color: var(--text); border: 1px solid 
 .finding span { color: var(--text); }
 .finding.ok-box { border-color: var(--ok); margin-bottom: 12px; }
 .alert-badge { font-weight: 600; }
+.alert-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+details.ignored { margin: 4px 0 12px; }
+details.ignored summary { cursor: pointer; padding: 4px 0; }
+details.ignored .finding { border-color: var(--border); opacity: .8; }
 .alert-badge.critical { background: var(--crit); border-color: var(--crit); color: #fff; }
 .alert-badge.warning { background: var(--warn); border-color: var(--warn); color: #1a1a1a; }
 .dev-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }

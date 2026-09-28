@@ -35,6 +35,8 @@ document.querySelectorAll("#tabs button").forEach((b) =>
 
 const renderers = {};
 function render(tab) {
+  const el = $("#" + tab);
+  if (renderers[tab] && !el.innerHTML.trim()) el.innerHTML = '<div class="muted">Loading…</div>';
   (renderers[tab] || (async () => {}))().catch((e) => ($("#" + tab).innerHTML = `<div class="finding critical">${esc(e.message)}</div>`));
 }
 const current = () => document.querySelector("#tabs button.active").dataset.tab;
@@ -43,23 +45,21 @@ const current = () => document.querySelector("#tabs button.active").dataset.tab;
 renderers.overview = async () => {
   const [o, m] = await Promise.all([api("/overview"), api("/metrics?hours=24")]);
   $("#updated").textContent = o.updated ? "Updated " + new Date(o.updated * 1000).toLocaleTimeString() : "Waiting for first refresh…";
-  const memByNode = Object.fromEntries(o.memory.nodes.map((n) => [n.node, n]));
   const hist = (node, f) => m.filter((r) => r.node === node).map(f);
 
   const integrations = o.integrations.map((i) =>
     `<span class="pill ${i.ok ? "ok" : i.configured ? "critical" : ""}" title="${esc(i.error || "")}">${esc(i.name)}: ${i.ok ? "ok" : i.configured ? "error" : "not configured"}</span>`).join(" ");
 
   const nodes = o.nodes.map((n) => {
-    const mm = memByNode[n.node] || {};
     if (!n.mem_total) return `<div class="card"><h3>${esc(n.node)} <span class="pill critical">${esc(n.status)}</span></h3></div>`;
+    const ramPct = pct(n.mem_used, n.mem_total);
     return `<div class="card">
-      <h3>${esc(n.node)} <span class="pill ${mm.status}">overcommit ${mm.overcommit_ratio}×</span></h3>
+      <h3>${esc(n.node)} <span class="pill ${level(ramPct)}">RAM ${ramPct.toFixed(0)}%</span></h3>
       <div class="row"><span>CPU</span><span>${(n.cpu * 100).toFixed(0)}% of ${n.maxcpu} cores</span></div>
       ${bar(n.cpu * 100, 100)}
-      <div class="row"><span>Host RAM</span><span>${gib(n.mem_used)} / ${gib(n.mem_total)}</span></div>
+      <div class="row"><span>RAM</span><span>${gib(n.mem_used)} / ${gib(n.mem_total)}</span></div>
       ${bar(n.mem_used, n.mem_total)}
-      <div class="row"><span>Assigned to running guests</span><span>${gib(mm.assigned_running)}</span></div>
-      ${bar(mm.assigned_running, n.mem_total * 1.5, mm.status)}
+      ${n.swap_total ? `<div class="row"><span>Swap</span><span>${gib(n.swap_used)} / ${gib(n.swap_total)}</span></div>${bar(n.swap_used, n.swap_total)}` : ""}
       <div class="row"><span>RAM % (24h)</span></div>${spark(hist(n.node, (r) => pct(r.mem_used, r.mem_total)), "#5b9dff")}
       <div class="row"><span>CPU % (24h)</span></div>${spark(hist(n.node, (r) => r.cpu * 100), "#3fb97a")}
     </div>`;
@@ -70,7 +70,7 @@ renderers.overview = async () => {
 
   updateBadge(o.alerts);
   $("#overview").innerHTML = `
-    ${alertsHtml(o.alerts)}
+    ${alertsHtml(o.alerts, o.ignored_alerts)}
     <div style="margin-bottom:12px">${integrations}</div>
     <div class="grid">
       <div class="card"><h3>Guests</h3><div class="stat">${o.guest_counts.running}/${o.guest_counts.total}</div><div class="muted">running · ${o.guest_counts.vms} VMs · ${o.guest_counts.containers} containers</div></div>
@@ -79,8 +79,9 @@ renderers.overview = async () => {
       <div class="card"><h3>WAN gateways</h3>${gw || '<div class="muted">pfSense not connected</div>'}</div>
     </div>
     <h2>Nodes</h2><div class="grid">${nodes}</div>
-    ${failoverHtml(o.memory.failover)}
     <h2>Findings</h2>${findingsHtml(crit.length ? crit : o.findings.slice(0, 10))}`;
+  document.querySelectorAll("#overview .ignore").forEach((b) => (b.onclick = () => alertAction("/alerts/ignore", b.dataset.key, b.dataset.msg)));
+  document.querySelectorAll("#overview .unignore").forEach((b) => (b.onclick = () => alertAction("/alerts/unignore", b.dataset.key)));
 };
 
 const ago = (ts) => {
@@ -88,10 +89,24 @@ const ago = (ts) => {
   return m < 1 ? "just now" : m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
 };
 
-function alertsHtml(alerts) {
-  if (!alerts || !alerts.length) return '<div class="finding ok-box"><b class="ok">All clear</b> <span>No active alerts.</span></div>';
-  return `<h2 style="margin-top:0">Alerts (${alerts.length})</h2>${alerts.map((a) =>
-    `<div class="finding ${a.severity}"><b class="${a.severity}">${esc(a.severity)}</b> <span>${esc(a.message)}</span> <span class="muted">· ${ago(a.since)}</span></div>`).join("")}`;
+function alertsHtml(alerts, ignored = []) {
+  const list = !alerts.length
+    ? '<div class="finding ok-box"><b class="ok">All clear</b> <span>No active alerts.</span></div>'
+    : `<h2 style="margin-top:0">Alerts (${alerts.length})</h2>${alerts.map((a) =>
+      `<div class="finding ${a.severity} alert-row"><div><b class="${a.severity}">${esc(a.severity)}</b> <span>${esc(a.message)}</span> <span class="muted">· ${ago(a.since)}</span></div>
+       <button class="small ignore" data-key="${esc(a.key)}" data-msg="${esc(a.message)}" title="Hide this alert until you restore it">Ignore</button></div>`).join("")}`;
+  const hidden = ignored.length ? `<details class="ignored"><summary class="muted">${ignored.length} ignored alert${ignored.length === 1 ? "" : "s"}</summary>
+    ${ignored.map((i) => `<div class="finding alert-row"><div><span>${esc(i.message || i.key)}</span> <span class="muted">· ${i.active ? "still happening" : "not happening now"} · ignored ${ago(i.created) === "just now" ? "just now" : ago(i.created) + " ago"}</span></div>
+      <button class="small unignore" data-key="${esc(i.key)}">Restore</button></div>`).join("")}</details>` : "";
+  return list + hidden;
+}
+
+async function alertAction(path, key, message = "") {
+  try {
+    const r = await api(path, { method: "POST", body: JSON.stringify({ key, message }) });
+    updateBadge(r.alerts);
+    render("overview");
+  } catch (e) { toast(e.message, "critical"); }
 }
 
 function updateBadge(alerts) {
@@ -103,15 +118,6 @@ function updateBadge(alerts) {
 }
 
 $("#alert-badge").onclick = () => document.querySelector('#tabs button[data-tab="overview"]').click();
-
-function failoverHtml(f) {
-  if (!f || !f.length) return "";
-  return `<h2>If a node goes down</h2><div class="grid">${f.map((x) => `
-    <div class="card"><h3>${esc(x.if_down)} fails <span class="pill ${x.fits ? "ok" : x.fits_with_ballooning ? "warning" : "critical"}">${x.fits ? "fits" : x.fits_with_ballooning ? "fits with ballooning" : "won't fit"}</span></h3>
-    <div class="row"><span>Running guests need</span><span>${gib(x.needed)} (${gib(x.needed_with_ballooning)} min)</span></div>
-    <div class="row"><span>${esc(x.survivors.join(", "))} has</span><span>${gib(x.capacity)}</span></div>
-    ${bar(x.needed, x.capacity * 1.5, x.fits ? "ok" : x.fits_with_ballooning ? "warning" : "critical")}</div>`).join("")}</div>`;
-}
 
 function findingsHtml(list) {
   if (!list.length) return '<div class="muted">No findings.</div>';
@@ -249,32 +255,6 @@ renderers.inventory = async () => {
   }));
 };
 
-// ---------- memory ----------
-renderers.memory = async () => {
-  const d = await api("/memory");
-  const cards = d.nodes.filter((n) => n.total).map((n) => `<div class="card">
-    <h3>${esc(n.node)} <span class="pill ${n.status}">${n.overcommit_ratio}× (${n.status})</span></h3>
-    <div class="row"><span>Physical RAM</span><span>${gib(n.total)}</span></div>
-    <div class="row"><span>Host used</span><span>${gib(n.host_used)} (${n.host_used_pct}%)</span></div>${bar(n.host_used, n.total)}
-    <div class="row"><span>Assigned, running guests</span><span>${gib(n.assigned_running)}</span></div>
-    <div class="row"><span>Balloon floor, running</span><span>${gib(n.balloon_floor)}</span></div>
-    <div class="row"><span>Actually used by guests</span><span>${gib(n.guest_used)}</span></div>
-    <div class="row"><span>Assigned if all started</span><span>${gib(n.assigned_all)} (${n.overcommit_ratio_if_all_started}×)</span></div>
-    <div class="row"><span>KSM shared</span><span>${gib(n.ksm_shared)}</span></div>
-    <div class="row"><span>Swap used</span><span>${gib(n.swap_used)}</span></div>
-    ${n.notes.length ? `<ul class="notes">${n.notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
-  </div>`).join("");
-  $("#memory").innerHTML = `<p class="muted">Overcommit = RAM assigned to running guests ÷ physical RAM. Warning at ${d.thresholds.warn}×, critical at ${d.thresholds.crit}×.</p>
-    <div class="grid">${cards}</div>${failoverHtml(d.failover)}
-    <h2>Will it fit?</h2>
-    <div class="card"><input id="fit-gb" class="filter" type="number" min="0.5" step="0.5" value="8" style="width:100px"> GiB
-      <button id="fit-go">Check</button><div id="fit-out" style="margin-top:8px"></div></div>`;
-  $("#fit-go").onclick = async () => {
-    const r = await api("/memory/fit?gb=" + encodeURIComponent($("#fit-gb").value));
-    $("#fit-out").innerHTML = r.map((x) => `<div class="row"><span>${esc(x.node)}</span><span class="${x.status}">${x.current_ratio}× → ${x.new_ratio}×</span></div>`).join("");
-  };
-};
-
 // ---------- firewall ----------
 renderers.firewall = async () => {
   const pf = await api("/raw/pfsense");
@@ -366,7 +346,7 @@ const TASKS = {
     "Are there any IP conflicts?",
     "Find me a free IP on each VLAN",
     "A VM has no network. Help me troubleshoot step by step",
-    "A node is using a lot of memory. What's using it?",
+    "A node is using a lot of RAM. What's using it?",
   ],
 };
 

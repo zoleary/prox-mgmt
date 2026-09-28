@@ -1,13 +1,14 @@
 """FastAPI app: dashboard API, chat, approval queue, and a background poller."""
 
 import asyncio
+import hashlib
 import logging
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -104,6 +105,25 @@ def memory_fit(gb: float):
 @api.get("/alerts")
 def alerts():
     return state.alerts
+
+
+class AlertKey(BaseModel):
+    key: str
+    message: str = ""
+
+
+@api.post("/alerts/ignore")
+def ignore_alert(body: AlertKey):
+    db.ignore_alert(body.key[:200], body.message[:500])
+    state.update_alerts()
+    return {"alerts": state.alerts, "ignored": state.ignored_alerts}
+
+
+@api.post("/alerts/unignore")
+def unignore_alert(body: AlertKey):
+    db.unignore_alert(body.key)
+    state.update_alerts()
+    return {"alerts": state.alerts, "ignored": state.ignored_alerts}
 
 
 @api.get("/devices")
@@ -224,9 +244,17 @@ def reject(action_id: int):
 app.mount("/api", api)
 
 
+STATIC = Path(__file__).parent / "web" / "static"
+# Stamp the script and stylesheet URLs with a content hash so browsers load the new files after an update.
+ASSET_VERSION = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("app.js", "style.css"))).hexdigest()[:12]
+INDEX_HTML = ((STATIC / "index.html").read_text()
+              .replace('/static/app.js"', f'/static/app.js?v={ASSET_VERSION}"')
+              .replace('/static/style.css"', f'/static/style.css?v={ASSET_VERSION}"'))
+
+
 @app.get("/", dependencies=[Depends(require_user)], include_in_schema=False)
 def index():
-    return FileResponse(Path(__file__).parent / "web" / "static" / "index.html")
+    return HTMLResponse(INDEX_HTML, headers={"Cache-Control": "no-cache"})
 
 
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "web" / "static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")

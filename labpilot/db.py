@@ -1,4 +1,4 @@
-"""SQLite storage: metric history, the queue of changes waiting for approval, and the device inventory."""
+"""SQLite storage: metric history, the queue of changes waiting for approval, the device inventory, and ignored alerts."""
 
 import json
 import os
@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL, kind TEXT, ip TEXT, mac TEXT, role TEXT, location TEXT,
     check_port INTEGER, notes TEXT, updated REAL
+);
+CREATE TABLE IF NOT EXISTS ignored_alerts (
+    key TEXT PRIMARY KEY, message TEXT, created REAL
 );
 """
 
@@ -98,6 +101,19 @@ class DB:
     def delete_device(self, device_id: int) -> bool:
         with self.lock, self.conn:
             return self.conn.execute("DELETE FROM devices WHERE id=?", (device_id,)).rowcount == 1
+
+    def ignored_alerts(self) -> dict[str, dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT * FROM ignored_alerts ORDER BY created DESC").fetchall()
+        return {r["key"]: dict(r) for r in rows}
+
+    def ignore_alert(self, key: str, message: str) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("INSERT OR REPLACE INTO ignored_alerts VALUES (?,?,?)", (key, message, time.time()))
+
+    def unignore_alert(self, key: str) -> bool:
+        with self.lock, self.conn:
+            return self.conn.execute("DELETE FROM ignored_alerts WHERE key=?", (key,)).rowcount == 1
 
 
 def _action(row) -> dict:

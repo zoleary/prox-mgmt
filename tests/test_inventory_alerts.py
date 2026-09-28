@@ -81,3 +81,24 @@ def test_assistant_save_device_needs_approval(tmp_path):
     assert state.devices[0]["ip"] == "10.0.0.50"
     p2 = actions.propose(state, db, "save_device", {"name": "NAS", "kind": "nas", "ip": "10.0.0.51"})
     assert p2["summary"].startswith("Update")
+
+
+def test_ignore_and_restore_alert(tmp_path):
+    from labpilot.config import Settings
+    from labpilot.state import LabState
+
+    db = DB(str(tmp_path))
+    db.save_device(inventory.clean_device({"name": "nas", "kind": "nas", "ip": "10.0.0.50", "check_port": 5000}))
+    state = LabState(Settings(), {}, db)
+    state.load_devices()
+    state.device_status = {1: {"up": False, "since": 0}}
+    state.update_alerts()
+    assert [a["key"] for a in state.alerts] == ["device:1"]
+
+    db.ignore_alert("device:1", "nas is down")
+    state.update_alerts()
+    assert state.alerts == [] and state.ignored_alerts[0]["active"] is True
+
+    db.unignore_alert("device:1")
+    state.update_alerts()
+    assert [a["key"] for a in state.alerts] == ["device:1"] and state.ignored_alerts == []

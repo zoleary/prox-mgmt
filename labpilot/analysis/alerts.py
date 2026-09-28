@@ -23,8 +23,6 @@ def build_alerts(*, nodes, quorum, memory_nodes, errors, tunnels, gateways, devi
             continue
         if m.get("host_used_pct", 0) >= 90:
             add("warning", f"mem:{m['node']}", f"{m['node']} host RAM is at {m['host_used_pct']}%")
-        if m.get("status") == "critical":
-            add("warning", f"overcommit:{m['node']}", f"{m['node']} memory overcommit is {m['overcommit_ratio']}x")
     for name, err in errors.items():
         add("warning", f"integration:{name}", f"Can't reach {name}: {err[:160]}")
     for t in tunnels:

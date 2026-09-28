@@ -20,6 +20,7 @@ class LabState:
         self.devices: list[dict] = []
         self.device_status: dict[int, dict] = {}
         self.alerts: list[dict] = []
+        self.ignored_alerts: list[dict] = []
         self._alert_seen: dict[str, float] = {}
         self.raw: dict[str, dict] = {}
         self.errors: dict[str, str] = {}
@@ -54,7 +55,9 @@ class LabState:
             tunnels=pf.get("tunnels", []), gateways=pf.get("gateways", []),
             devices=self.devices, device_status=self.device_status, findings=self.ipam()["findings"])
         self._alert_seen = track_since(alerts, self._alert_seen, time.time())
-        self.alerts = alerts
+        ignored = self.db.ignored_alerts() if self.db is not None else {}
+        self.alerts = [a for a in alerts if a["key"] not in ignored]
+        self.ignored_alerts = [{**v, "active": any(a["key"] == k for a in alerts)} for k, v in ignored.items()]
 
     # ---------- derived views ----------
 
@@ -99,6 +102,7 @@ class LabState:
         return {
             "updated": self.updated,
             "alerts": self.alerts,
+            "ignored_alerts": self.ignored_alerts,
             "integrations": self.integration_status(),
             "quorate": self.raw.get("proxmox", {}).get("quorum"),
             "nodes": self.nodes,
