@@ -35,7 +35,7 @@ document.querySelectorAll("#tabs button").forEach((b) =>
 
 const renderers = {};
 function render(tab) {
-  (renderers[tab] || (() => {}))().catch((e) => ($("#" + tab).innerHTML = `<div class="finding critical">${esc(e.message)}</div>`));
+  (renderers[tab] || (async () => {}))().catch((e) => ($("#" + tab).innerHTML = `<div class="finding critical">${esc(e.message)}</div>`));
 }
 const current = () => document.querySelector("#tabs button.active").dataset.tab;
 
@@ -125,9 +125,9 @@ window.doAction = async (tool, params, question) => {
   document.querySelectorAll("main button").forEach((b) => (b.disabled = true));
   try {
     const a = await api("/do", { method: "POST", body: JSON.stringify({ tool, params }) });
-    addMsg("bot", `${a.summary}: ${a.status}${a.result ? " (" + a.result + ")" : ""}`);
+    toast(`${a.summary}: ${a.status}${a.result ? " (" + a.result + ")" : ""}`, a.status === "done" ? "ok" : "critical");
   } catch (e) {
-    addMsg("bot", "Failed: " + e.message);
+    toast("Failed: " + e.message, "critical");
   }
   render(current());
 };
@@ -217,12 +217,82 @@ renderers.actions = async () => {
 window.decide = async (id, what) => {
   try {
     const a = await api(`/actions/${id}/${what}`, { method: "POST" });
-    addMsg("bot", `Change #${id} ${a.status}${a.result ? ": " + a.result : ""}`);
+    const text = `Change #${id} ${a.status}${a.result ? ": " + a.result : ""}`;
+    addMsg("bot", text);
+    toast(text, a.status === "done" ? "ok" : a.status === "failed" ? "critical" : "");
   } catch (e) {
     addMsg("bot", `Change #${id}: ${e.message}`);
+    toast(`Change #${id}: ${e.message}`, "critical");
   }
   document.querySelectorAll(`[data-action="${id}"] button`).forEach((b) => (b.disabled = true));
   render(current());
+};
+
+function toast(text, cls = "") {
+  const t = document.createElement("div");
+  t.className = "toast " + cls;
+  t.textContent = text;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+}
+
+// ---------- assistant ----------
+const TASKS = {
+  "Proxmox": [
+    "Give me a health check of the cluster",
+    "Which node has the most free memory?",
+    "Walk me through creating a new VM",
+    "Walk me through creating an LXC container from a template",
+    "Take a snapshot of a VM before I change it",
+    "Help me set up scheduled backups",
+    "Walk me through updating both Proxmox nodes safely",
+    "Migrate a VM to the other node",
+    "Which VMs are missing the QEMU guest agent, and how do I install it?",
+  ],
+  "pfSense": [
+    "Show my firewall rules and point out anything risky",
+    "What's the status of my IPsec tunnels?",
+    "Walk me through adding a port forward",
+    "Walk me through creating a new VLAN end to end (pfSense + Proxmox)",
+    "Help me block a device on my network",
+    "Are my WAN gateways healthy?",
+    "How do I back up my pfSense config?",
+    "Walk me through a DHCP static mapping in pfSense",
+  ],
+  "Troubleshoot": [
+    "Are there any IP conflicts?",
+    "Find me a free IP on each VLAN",
+    "A VM has no network. Help me troubleshoot step by step",
+    "A node is using a lot of memory. What's using it?",
+  ],
+};
+
+$("#tasks").innerHTML = Object.entries(TASKS).map(([group, items]) =>
+  `<h3>${esc(group)}</h3>${items.map((t) => `<button class="task">${esc(t)}</button>`).join("")}`).join("");
+document.querySelectorAll("#tasks .task").forEach((b) => b.addEventListener("click", () => send(b.textContent)));
+
+// Small, safe markdown: escape first, then add code blocks (with Copy), inline code, bold and headings.
+function md(text) {
+  const blocks = [];
+  let h = esc(text).replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, (_, code) => {
+    blocks.push(code.replace(/\n$/, ""));
+    return `\u0000${blocks.length - 1}\u0000`;
+  });
+  h = h.replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+    .replace(/^#{1,4} (.+)$/gm, "<b>$1</b>");
+  return h.replace(/\u0000(\d+)\u0000\n?/g, (_, i) =>
+    `<div class="code"><button class="small copy" onclick="copyCode(this)">Copy</button><pre>${blocks[i]}</pre></div>`);
+}
+
+window.copyCode = (btn) => {
+  const text = btn.nextElementSibling.textContent;
+  const done = () => { btn.textContent = "Copied"; setTimeout(() => (btn.textContent = "Copy"), 1500); };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done);
+  else {  // plain http on the LAN: clipboard API is unavailable, fall back to a hidden textarea
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); done();
+  }
 };
 
 // ---------- chat ----------
@@ -231,7 +301,7 @@ let sessionId = null;
 function addMsg(who, text, extra = "") {
   const div = document.createElement("div");
   div.className = "msg " + who;
-  div.innerHTML = esc(text) + extra;
+  div.innerHTML = (who === "bot" ? md(text) : esc(text)) + extra;
   $("#chat-log").appendChild(div);
   $("#chat-log").scrollTop = 1e9;
   return div;
@@ -239,6 +309,7 @@ function addMsg(who, text, extra = "") {
 
 async function send(text) {
   if (!text.trim()) return;
+  if (current() !== "assistant") document.querySelector('#tabs button[data-tab="assistant"]').click();
   addMsg("user", text);
   $("#chat-input").value = "";
   const thinking = addMsg("bot", "Thinking…");
@@ -265,7 +336,6 @@ async function send(text) {
 
 $("#chat-form").addEventListener("submit", (e) => { e.preventDefault(); send($("#chat-input").value); });
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(e.target.value); } });
-document.querySelectorAll(".example").forEach((b) => b.addEventListener("click", () => send(b.textContent)));
 $("#chat-reset").onclick = async () => {
   if (sessionId) await api(`/chat/${sessionId}/reset`, { method: "POST" }).catch(() => {});
   sessionId = null;

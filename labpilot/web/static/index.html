@@ -15,6 +15,7 @@
       <button data-tab="ipam">IP addresses</button>
       <button data-tab="memory">Memory</button>
       <button data-tab="firewall">Firewall</button>
+      <button data-tab="assistant">Assistant</button>
       <button data-tab="actions">Changes</button>
     </nav>
     <div class="spacer"></div>
@@ -22,36 +23,32 @@
     <button id="refresh">Refresh</button>
   </header>
 
-  <div id="layout">
-    <main>
-      <section id="overview" class="tab active"></section>
-      <section id="guests" class="tab"></section>
-      <section id="ipam" class="tab"></section>
-      <section id="memory" class="tab"></section>
-      <section id="firewall" class="tab"></section>
-      <section id="actions" class="tab"></section>
-    </main>
-
-    <aside id="chat">
-      <div class="chat-head">
-        <h2>Assistant</h2>
-        <button id="chat-reset" class="small">New chat</button>
-      </div>
-      <div id="chat-log">
-        <div class="msg bot">Ask about the lab, or ask me to change something. Changes wait for your approval.
-          <div class="examples">
-            <button class="example">Which node has the most memory headroom?</button>
-            <button class="example">Find me a free IP on the servers VLAN</button>
-            <button class="example">Are there any IP conflicts?</button>
+  <main>
+    <section id="overview" class="tab active"></section>
+    <section id="guests" class="tab"></section>
+    <section id="ipam" class="tab"></section>
+    <section id="memory" class="tab"></section>
+    <section id="firewall" class="tab"></section>
+    <section id="assistant" class="tab">
+      <div id="assistant-layout">
+        <div id="tasks"></div>
+        <div id="chat">
+          <div class="chat-head">
+            <h2>Lab assistant</h2>
+            <button id="chat-reset" class="small">New chat</button>
           </div>
+          <div id="chat-log">
+            <div class="msg bot">Hi! I can check your lab, walk you through Proxmox and pfSense tasks step by step, and queue changes for your approval. Pick a task on the left or ask anything.</div>
+          </div>
+          <form id="chat-form">
+            <textarea id="chat-input" rows="3" placeholder="Ask LabPilot… (Enter to send, Shift+Enter for a new line)"></textarea>
+            <button type="submit">Send</button>
+          </form>
         </div>
       </div>
-      <form id="chat-form">
-        <textarea id="chat-input" rows="2" placeholder="Ask LabPilot…"></textarea>
-        <button type="submit">Send</button>
-      </form>
-    </aside>
-  </div>
+    </section>
+    <section id="actions" class="tab"></section>
+  </main>
 
   <script src="/static/app.js"></script>
 </body>
