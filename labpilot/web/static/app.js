@@ -68,7 +68,9 @@ renderers.overview = async () => {
   const gw = (o.pfsense.gateways || []).map((g) => `<div class="row"><span>${esc(g.name)}</span><span>${esc(g.status)} ${esc(g.delay || "")} ${esc(g.loss || "")}</span></div>`).join("");
   const crit = o.findings.filter((f) => f.severity !== "info");
 
+  updateBadge(o.alerts);
   $("#overview").innerHTML = `
+    ${alertsHtml(o.alerts)}
     <div style="margin-bottom:12px">${integrations}</div>
     <div class="grid">
       <div class="card"><h3>Guests</h3><div class="stat">${o.guest_counts.running}/${o.guest_counts.total}</div><div class="muted">running · ${o.guest_counts.vms} VMs · ${o.guest_counts.containers} containers</div></div>
@@ -80,6 +82,27 @@ renderers.overview = async () => {
     ${failoverHtml(o.memory.failover)}
     <h2>Findings</h2>${findingsHtml(crit.length ? crit : o.findings.slice(0, 10))}`;
 };
+
+const ago = (ts) => {
+  const m = Math.round((Date.now() / 1000 - ts) / 60);
+  return m < 1 ? "just now" : m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
+};
+
+function alertsHtml(alerts) {
+  if (!alerts || !alerts.length) return '<div class="finding ok-box"><b class="ok">All clear</b> <span>No active alerts.</span></div>';
+  return `<h2 style="margin-top:0">Alerts (${alerts.length})</h2>${alerts.map((a) =>
+    `<div class="finding ${a.severity}"><b class="${a.severity}">${esc(a.severity)}</b> <span>${esc(a.message)}</span> <span class="muted">· ${ago(a.since)}</span></div>`).join("")}`;
+}
+
+function updateBadge(alerts) {
+  const b = $("#alert-badge");
+  const crit = alerts.filter((a) => a.severity === "critical").length;
+  b.hidden = !alerts.length;
+  b.className = "alert-badge " + (crit ? "critical" : "warning");
+  b.textContent = `⚠ ${alerts.length} alert${alerts.length === 1 ? "" : "s"}`;
+}
+
+$("#alert-badge").onclick = () => document.querySelector('#tabs button[data-tab="overview"]').click();
 
 function failoverHtml(f) {
   if (!f || !f.length) return "";
@@ -149,12 +172,81 @@ renderers.ipam = async () => {
   </div>`).join("");
   const rows = d.addresses.map((a) => `<tr data-q="${esc(JSON.stringify(a).toLowerCase())}">
     <td class="mono">${esc(a.ip)}</td><td>${esc(a.subnet_name || "unknown")}</td><td>${esc(a.names.join(", "))}</td>
-    <td class="mono">${esc(a.macs.join(", "))}</td><td>${a.sources.map((s) => `<span class="pill">${esc(s)}</span>`).join(" ")}</td></tr>`).join("");
+    <td class="mono">${esc(a.macs.join(", "))}</td><td>${a.sources.map((s) => `<span class="pill">${esc(s)}</span>`).join(" ")}</td>
+    <td>${a.sources.includes("inventory") ? "" : `<button class="small add-inv" data-ip="${esc(a.ip)}" data-mac="${esc(a.macs[0] || "")}" data-name="${esc(a.names[0] || "")}" title="Add to inventory">+ Inventory</button>`}</td></tr>`).join("");
   $("#ipam").innerHTML = `<h2>Subnets and VLANs</h2><div class="grid">${subnets || '<div class="muted">No subnets yet. Connect Windows DHCP or pfSense, or set EXTRA_SUBNETS.</div>'}</div>
     <h2>Findings</h2>${findingsHtml(d.findings)}
     <h2>All addresses (${d.addresses.length})</h2>
     <input class="filter" placeholder="Filter by IP, name, MAC…" oninput="filterRows(this, '#ipam')">
-    <table><tr><th>IP</th><th>Subnet</th><th>Names</th><th>MACs</th><th>Seen by</th></tr>${rows}</table>`;
+    <table><tr><th>IP</th><th>Subnet</th><th>Names</th><th>MACs</th><th>Seen by</th><th></th></tr>${rows}</table>`;
+  document.querySelectorAll("#ipam .add-inv").forEach((b) => (b.onclick = () => {
+    pendingDevice = { name: b.dataset.name, ip: b.dataset.ip, mac: b.dataset.mac };
+    document.querySelector('#tabs button[data-tab="inventory"]').click();
+  }));
+};
+
+// ---------- inventory ----------
+let pendingDevice = null;  // prefill from the IP addresses tab
+
+renderers.inventory = async () => {
+  const { devices, kinds } = await api("/devices");
+  const statusCell = (d) => !d.check_port ? '<span class="muted">not checked</span>'
+    : !d.status ? '<span class="muted">waiting…</span>'
+    : d.status.up ? `<span class="ok">up</span> <span class="muted">${ago(d.status.since)}</span>`
+    : `<span class="critical">down</span> <span class="muted">${ago(d.status.since)}</span>`;
+  const rows = devices.map((d) => `<tr data-q="${esc(JSON.stringify(d).toLowerCase())}">
+    <td><b>${esc(d.name)}</b>${d.notes ? `<div class="muted">${esc(d.notes)}</div>` : ""}</td><td>${esc(d.kind)}</td>
+    <td class="mono">${esc(d.ip)}</td><td class="mono">${esc(d.mac)}</td><td>${esc(d.role)}</td><td>${esc(d.location)}</td>
+    <td>${d.check_port ? `<span class="mono">:${d.check_port}</span> ` : ""}${statusCell(d)}</td>
+    <td class="nowrap"><button class="small edit-dev" data-id="${d.id}">Edit</button> <button class="small danger del-dev" data-id="${d.id}">Delete</button></td></tr>`).join("");
+  $("#inventory").innerHTML = `
+    <div class="card" id="dev-form-card">
+      <h3 id="dev-form-title">Add a device</h3>
+      <form id="dev-form" class="dev-form">
+        <input type="hidden" name="id">
+        <label>Name *<input name="name" required maxlength="64" placeholder="e.g. synology-nas"></label>
+        <label>Type<select name="kind">${kinds.map((k) => `<option>${esc(k)}</option>`).join("")}</select></label>
+        <label>IP address<input name="ip" placeholder="10.0.0.50"></label>
+        <label>MAC<input name="mac" placeholder="aa:bb:cc:dd:ee:ff"></label>
+        <label>Role<input name="role" maxlength="120" placeholder="e.g. backups, Plex media"></label>
+        <label>Location<input name="location" maxlength="120" placeholder="e.g. rack, office"></label>
+        <label>Port check<input name="check_port" type="number" min="1" max="65535" placeholder="22, 443, 5000…"></label>
+        <label class="wide">Notes<textarea name="notes" rows="2" maxlength="2000" placeholder="Login URL, model, what's running on it…"></textarea></label>
+        <div class="wide actions-row"><button type="submit" class="approve">Save</button> <button type="button" id="dev-cancel">Clear</button>
+          <span class="muted">Port check: Lab Helper tries a TCP connection every refresh and alerts if it fails.</span></div>
+      </form>
+    </div>
+    <h2>Devices (${devices.length})</h2>
+    <input class="filter" placeholder="Filter devices…" oninput="filterRows(this, '#inventory')">
+    ${devices.length ? `<table><tr><th>Name</th><th>Type</th><th>IP</th><th>MAC</th><th>Role</th><th>Location</th><th>Health</th><th></th></tr>${rows}</table>`
+      : '<div class="muted">No devices yet. Add your NAS, switches, access points and other gear so the assistant knows about them. You can also add them from the IP addresses tab.</div>'}`;
+
+  const form = $("#dev-form");
+  const fill = (d) => {
+    form.reset();
+    for (const [k, v] of Object.entries(d || {})) if (form.elements[k] && v != null) form.elements[k].value = v;
+    $("#dev-form-title").textContent = d && d.id ? `Edit ${d.name}` : "Add a device";
+  };
+  if (pendingDevice) { fill(pendingDevice); pendingDevice = null; form.elements.name.focus(); }
+  $("#dev-cancel").onclick = () => fill(null);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(form));
+    const id = body.id; delete body.id;
+    try {
+      await api(id ? `/devices/${id}` : "/devices", { method: id ? "PUT" : "POST", body: JSON.stringify(body) });
+      toast(`Saved ${body.name}`, "ok");
+      render("inventory");
+    } catch (err) { toast(err.message, "critical"); }
+  };
+  const byId = Object.fromEntries(devices.map((d) => [d.id, d]));
+  document.querySelectorAll("#inventory .edit-dev").forEach((b) => (b.onclick = () => { fill(byId[b.dataset.id]); window.scrollTo(0, 0); }));
+  document.querySelectorAll("#inventory .del-dev").forEach((b) => (b.onclick = async () => {
+    const d = byId[b.dataset.id];
+    if (!confirm(`Delete ${d.name} from the inventory?`)) return;
+    try { await api(`/devices/${d.id}`, { method: "DELETE" }); toast(`Deleted ${d.name}`, "ok"); render("inventory"); }
+    catch (err) { toast(err.message, "critical"); }
+  }));
 };
 
 // ---------- memory ----------
@@ -259,7 +351,18 @@ const TASKS = {
     "How do I back up my pfSense config?",
     "Walk me through a DHCP static mapping in pfSense",
   ],
+  "Home lab": [
+    "What's in my inventory, and what on my network isn't documented yet?",
+    "Help me set up Docker and Compose in a new LXC container",
+    "Set up Tailscale so I can reach my lab remotely",
+    "Plan a backup strategy for my whole lab (3-2-1)",
+    "Put my services behind a reverse proxy with HTTPS",
+    "Harden SSH on my Linux servers",
+    "Set up Uptime Kuma to monitor my services",
+    "How should I split my network into VLANs?",
+  ],
   "Troubleshoot": [
+    "Are there any alerts right now? Help me fix them",
     "Are there any IP conflicts?",
     "Find me a free IP on each VLAN",
     "A VM has no network. Help me troubleshoot step by step",
@@ -349,4 +452,7 @@ $("#refresh").onclick = async () => {
 };
 
 render("overview");
-setInterval(() => render(current()), 60000);
+setInterval(() => {
+  render(current());
+  if (current() !== "overview") api("/alerts").then(updateBadge).catch(() => {});
+}, 60000);

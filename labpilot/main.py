@@ -12,7 +12,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, actions
+from . import __version__, actions, inventory
 from .analysis.memory import can_fit
 from .chat import ChatService
 from .config import get_settings
@@ -25,7 +25,7 @@ log = logging.getLogger("labpilot")
 
 settings = get_settings()
 db = DB(settings.data_dir)
-state = LabState(settings, build_integrations(settings))
+state = LabState(settings, build_integrations(settings), db)
 chat = ChatService(settings, state, db)
 security = HTTPBasic()
 
@@ -59,13 +59,13 @@ async def poller() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not settings.admin_password:
-        raise RuntimeError("Set ADMIN_PASSWORD before starting LabPilot (it can change your lab).")
+        raise RuntimeError("Set ADMIN_PASSWORD before starting Lab Helper (it can change your lab).")
     task = asyncio.create_task(poller())
     yield
     task.cancel()
 
 
-app = FastAPI(title="LabPilot", version=__version__, lifespan=lifespan)
+app = FastAPI(title="Lab Helper", version=__version__, lifespan=lifespan)
 
 
 @app.get("/healthz")
@@ -99,6 +99,47 @@ def memory():
 @api.get("/memory/fit")
 def memory_fit(gb: float):
     return can_fit(state.memory()["nodes"], int(gb * 1024**3), settings.mem_warn_ratio, settings.mem_crit_ratio)
+
+
+@api.get("/alerts")
+def alerts():
+    return state.alerts
+
+
+@api.get("/devices")
+def devices():
+    return {"devices": state.devices_with_status(), "kinds": inventory.KINDS}
+
+
+def _save_device(body: dict, device_id: int | None):
+    try:
+        clean = inventory.clean_device(body)
+        new_id = db.save_device(clean, device_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404, "No such device")
+    state.load_devices()
+    return db.get_device(new_id)
+
+
+@api.post("/devices")
+def add_device(body: dict):
+    return _save_device(body, None)
+
+
+@api.put("/devices/{device_id}")
+def update_device(device_id: int, body: dict):
+    return _save_device(body, device_id)
+
+
+@api.delete("/devices/{device_id}")
+def delete_device(device_id: int):
+    if not db.delete_device(device_id):
+        raise HTTPException(404, "No such device")
+    state.load_devices()
+    state.device_status.pop(device_id, None)
+    return {"ok": True}
 
 
 @api.get("/metrics")

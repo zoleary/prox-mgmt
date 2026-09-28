@@ -4,6 +4,8 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import inventory
+from .analysis.alerts import build_alerts, track_since
 from .analysis.ipam import build_inventory, build_subnets
 from .analysis.memory import memory_report
 
@@ -11,9 +13,14 @@ log = logging.getLogger(__name__)
 
 
 class LabState:
-    def __init__(self, settings, integrations: dict):
+    def __init__(self, settings, integrations: dict, db=None):
         self.s = settings
         self.integrations = integrations
+        self.db = db
+        self.devices: list[dict] = []
+        self.device_status: dict[int, dict] = {}
+        self.alerts: list[dict] = []
+        self._alert_seen: dict[str, float] = {}
         self.raw: dict[str, dict] = {}
         self.errors: dict[str, str] = {}
         self.updated: float | None = None
@@ -31,6 +38,23 @@ class LabState:
                 errors[name] = str(e)[:500]
                 raw[name] = self.raw.get(name, {})  # keep last good data
         self.raw, self.errors, self.updated = raw, errors, time.time()
+        self.load_devices()
+        self.device_status = inventory.check_devices(self.devices, self.device_status)
+        self.update_alerts()
+
+    def load_devices(self) -> None:
+        if self.db is not None:
+            self.devices = self.db.list_devices()
+
+    def update_alerts(self) -> None:
+        pf = self.raw.get("pfsense", {})
+        alerts = build_alerts(
+            nodes=self.nodes, quorum=self.raw.get("proxmox", {}).get("quorum"),
+            memory_nodes=self.memory()["nodes"], errors=self.errors,
+            tunnels=pf.get("tunnels", []), gateways=pf.get("gateways", []),
+            devices=self.devices, device_status=self.device_status, findings=self.ipam()["findings"])
+        self._alert_seen = track_since(alerts, self._alert_seen, time.time())
+        self.alerts = alerts
 
     # ---------- derived views ----------
 
@@ -52,6 +76,7 @@ class LabState:
 
     def ipam(self) -> dict:
         obs = [o for data in self.raw.values() for o in data.get("observations", [])]
+        obs += inventory.observations(self.devices)
         return build_inventory(obs, self.subnets(), self.guests)
 
     def memory(self) -> dict:
@@ -64,12 +89,16 @@ class LabState:
                 return g
         raise ValueError(f"no guest with id or name {ref!r}")
 
+    def devices_with_status(self) -> list[dict]:
+        return [{**d, "status": self.device_status.get(d["id"])} for d in self.devices]
+
     def overview(self) -> dict:
         guests = self.guests
         ipam = self.ipam()
         pf = self.raw.get("pfsense", {})
         return {
             "updated": self.updated,
+            "alerts": self.alerts,
             "integrations": self.integration_status(),
             "quorate": self.raw.get("proxmox", {}).get("quorum"),
             "nodes": self.nodes,

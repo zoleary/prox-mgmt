@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LabPilot</title>
+  <title>Lab Helper</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
-    <h1>LabPilot</h1>
+    <h1>Lab Helper</h1>
     <nav id="tabs">
       <button data-tab="overview" class="active">Overview</button>
       <button data-tab="guests">Guests</button>
+      <button data-tab="inventory">Inventory</button>
       <button data-tab="ipam">IP addresses</button>
       <button data-tab="memory">Memory</button>
       <button data-tab="firewall">Firewall</button>
@@ -19,6 +20,7 @@
       <button data-tab="actions">Changes</button>
     </nav>
     <div class="spacer"></div>
+    <button id="alert-badge" class="alert-badge" hidden title="Active alerts"></button>
     <span id="updated" class="muted"></span>
     <button id="refresh">Refresh</button>
   </header>
@@ -26,6 +28,7 @@
   <main>
     <section id="overview" class="tab active"></section>
     <section id="guests" class="tab"></section>
+    <section id="inventory" class="tab"></section>
     <section id="ipam" class="tab"></section>
     <section id="memory" class="tab"></section>
     <section id="firewall" class="tab"></section>
@@ -38,10 +41,10 @@
             <button id="chat-reset" class="small">New chat</button>
           </div>
           <div id="chat-log">
-            <div class="msg bot">Hi! I can check your lab, walk you through Proxmox and pfSense tasks step by step, and queue changes for your approval. Pick a task on the left or ask anything.</div>
+            <div class="msg bot">Hi! I'm Lab Helper. I can check your lab, walk you through Proxmox, pfSense, Docker, networking and other home lab tasks step by step, and queue changes for your approval. Pick a task on the left or ask anything.</div>
           </div>
           <form id="chat-form">
-            <textarea id="chat-input" rows="3" placeholder="Ask LabPilot… (Enter to send, Shift+Enter for a new line)"></textarea>
+            <textarea id="chat-input" rows="3" placeholder="Ask Lab Helper… (Enter to send, Shift+Enter for a new line)"></textarea>
             <button type="submit">Send</button>
           </form>
         </div>

@@ -1,11 +1,14 @@
-# LabPilot
+# Lab Helper
 
-A dashboard and chat assistant for a Proxmox home lab. It connects to a Proxmox VE cluster, pfSense, and Windows Server DHCP/DNS, then:
+A home lab dashboard and assistant. It connects to a Proxmox VE cluster, pfSense, and (optionally) Windows Server DHCP/DNS, keeps an inventory of the rest of your gear, then:
 
 - **Shows the environment**: node CPU/RAM with 24-hour history, guests, quorum, WAN gateways, firewall interfaces, aliases and rules.
 - **Tracks IP addresses** across every source (Proxmox config, guest agent, DHCP leases and reservations, DNS, pfSense ARP) and flags duplicate IPs, static IPs inside DHCP pools, stale DNS records, guests without DNS, and addresses outside any known subnet. It suggests free static IPs per VLAN.
 - **Plans memory**: overcommit ratio per node, ballooning floors, KSM, swap, "will an 8 GiB VM fit?", and whether one node can carry everything if the other fails.
 - **Chat assistant** (Claude) that answers from live data and can propose changes: start/stop/reboot guests, change memory, take snapshots, add DHCP reservations, add or remove DNS records, add addresses to pfSense aliases, and enable or disable pfSense firewall rules and IPsec tunnels.
+- **Device inventory**: document your NAS, switches, access points and other gear (IP, MAC, role, location, notes). Inventory IPs join the IP list, and any device can get a TCP port check.
+- **Health alerts**: node down, lost quorum, high host RAM, integration errors, gateway problems, IPsec tunnels down, devices failing their port check, and duplicate IPs. Shown on the Overview with a badge in the header.
+- **Lab assistant tab**: step-by-step help with Proxmox, pfSense, Docker, networking, backups, remote access and more, using your real lab data. Quick-task buttons for common jobs.
 - **Control buttons**: start, shut down, reboot or stop guests on the Guests tab, and enable or disable firewall rules and IPsec tunnels on the Firewall tab.
 
 **Nothing changes until you approve it.** The assistant only queues proposals. Each one appears in the chat and on the Changes tab with Approve / Reject buttons. Dashboard buttons ask you to confirm first. Every change is logged on the Changes tab.
@@ -61,15 +64,15 @@ pveum role add LabPilot --privs "VM.PowerMgmt VM.Config.Memory VM.Snapshot VM.Mo
 pveum acl modify /vms --users labpilot@pve --roles LabPilot
 ```
 
-Install `qemu-guest-agent` in your VMs and enable **Options → QEMU Guest Agent**. Without it LabPilot only knows static cloud-init IPs for VMs.
+Install `qemu-guest-agent` in your VMs and enable **Options → QEMU Guest Agent**. Without it Lab Helper only knows static cloud-init IPs for VMs.
 
 ### pfSense
 
-LabPilot uses the [pfSense REST API package](https://github.com/jaredhendrickson13/pfsense-api) (v2). It isn't in the built-in package manager. Install it from the pfSense shell following that project's install instructions for your pfSense version. Then go to **System → REST API**, enable API key authentication, and create a key under **Keys**. Give it a user with read access, plus: alias edit and firewall apply for alias changes; firewall rule edit and firewall apply to enable/disable rules; IPsec phase 1 edit and IPsec apply to enable/disable tunnels.
+Lab Helper uses the [pfSense REST API package](https://github.com/jaredhendrickson13/pfsense-api) (v2). It isn't in the built-in package manager. Install it from the pfSense shell following that project's install instructions for your pfSense version. Then go to **System → REST API**, enable API key authentication, and create a key under **Keys**. Give it a user with read access, plus: alias edit and firewall apply for alias changes; firewall rule edit and firewall apply to enable/disable rules; IPsec phase 1 edit and IPsec apply to enable/disable tunnels.
 
 ### Windows Server DHCP and DNS
 
-LabPilot runs PowerShell on the server over WinRM.
+Lab Helper runs PowerShell on the server over WinRM.
 
 1. Create a service account, for example `LAB\svc-labpilot`, and add it to **DHCP Administrators** and **DnsAdmins** (use **DHCP Users** only for read-only).
 2. Enable WinRM over HTTPS on the DHCP/DNS server:
@@ -79,7 +82,7 @@ LabPilot runs PowerShell on the server over WinRM.
    New-NetFirewallRule -DisplayName "WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow
    ```
 3. Allow the account to use WinRM (add it to **Remote Management Users**).
-4. Set `DNS_ZONES` to the zones LabPilot may read and change. It refuses to touch any other zone.
+4. Set `DNS_ZONES` to the zones Lab Helper may read and change. It refuses to touch any other zone.
 
 ### Chat assistant
 

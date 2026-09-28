@@ -15,16 +15,20 @@ from .analysis.memory import can_fit
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are LabPilot, a hands-on lab assistant for a home lab: a two-node Proxmox VE cluster \
-and pfSense as the firewall/router with VLANs and IPsec tunnels (Windows Server DHCP/DNS only if that \
-integration is configured). The user is an intermediate Linux user who likes to work step by step.
+SYSTEM_PROMPT = """You are Lab Helper, a hands-on assistant for the user's home lab. The core is a two-node \
+Proxmox VE cluster and pfSense (firewall/router, VLANs, IPsec tunnels); Windows Server DHCP/DNS only if that \
+integration is configured. The user also documents other gear (NAS, switches, access points, IoT, \
+workstations) in the device inventory. They are an intermediate Linux user who likes to work step by step.
 
 What you do:
-1. Answer questions about the lab from the tools, not from assumptions. Data refreshes about once a minute.
+1. Answer questions about the lab from the tools, not from assumptions. Data refreshes about once a minute. \
+Use list_devices for the user's gear and get_alerts for current problems.
 2. Make changes through the write tools (power, memory, snapshots, firewall aliases, firewall rules, \
-IPsec tunnels, and DHCP/DNS if configured).
-3. Walk the user through everything else (creating VMs/containers, backups, updates, migrations, \
-port forwards, VLANs, DHCP mappings, troubleshooting) as a guide.
+IPsec tunnels, inventory devices, and DHCP/DNS if configured).
+3. Help with anything else in a home lab as a guide: Proxmox and pfSense tasks, Linux administration, \
+Docker and Compose, networking and VLANs, DNS, storage/NAS and ZFS, backups, remote access (Tailscale, \
+WireGuard), reverse proxies and TLS, monitoring, Home Assistant, updates and security hardening, and \
+troubleshooting. When the user mentions gear that isn't in the inventory, offer to add it with save_device.
 
 When guiding:
 - Look at the live data first so the steps use their real node names, VMIDs, interfaces and IPs.
@@ -77,6 +81,10 @@ READ_TOOLS = [
      "input_schema": _obj({}, [])},
     {"name": "firewall_rules", "description": "pfSense firewall rules (with their tracker id), optionally for one interface.",
      "input_schema": _obj({"interface": {"type": "string"}}, [])},
+    {"name": "list_devices", "description": "The user's device inventory (name, kind, IP, MAC, role, location, notes) with port-check status.",
+     "input_schema": _obj({"search": {"type": "string", "description": "Filter by any text"}}, [])},
+    {"name": "get_alerts", "description": "Current health alerts: nodes, quorum, memory, integrations, gateways, tunnels, devices down, duplicate IPs.",
+     "input_schema": _obj({}, [])},
     {"name": "ipsec_tunnels", "description": "pfSense IPsec phase 1 tunnels: ikeid, description, remote gateway, enabled, live state.",
      "input_schema": _obj({}, [])},
 ]
@@ -155,6 +163,11 @@ def run_read_tool(state, name: str, p: dict):
     if name == "firewall_rules":
         rules = raw.get("pfsense", {}).get("rules", [])
         return [r for r in rules if not p.get("interface") or r.get("interface") == p["interface"]]
+    if name == "list_devices":
+        q = (p.get("search") or "").lower()
+        return [d for d in state.devices_with_status() if q in json.dumps(d).lower()]
+    if name == "get_alerts":
+        return state.alerts or "No active alerts."
     if name == "ipsec_tunnels":
         return raw.get("pfsense", {}).get("tunnels", [])
     raise ValueError(f"unknown tool {name}")

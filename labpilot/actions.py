@@ -170,6 +170,23 @@ def exec_tunnel_toggle(state, r):
     return str(_integration(state, "pfsense").set_tunnel_disabled(r["ikeid"], not r["enabled"]))
 
 
+# ---------- Inventory ----------
+
+def prep_device(state, p):
+    from .inventory import clean_device
+    d = clean_device(p)
+    existing = next((x for x in state.devices if x["name"].lower() == d["name"].lower()), None)
+    where = f" at {d['ip']}" if d["ip"] else ""
+    verb = "Update" if existing else "Add"
+    return {"device": d, "id": existing["id"] if existing else None}, f"{verb} inventory device {d['name']} ({d['kind']}){where}"
+
+
+def exec_device(state, r):
+    device_id = state.db.save_device(r["device"], r["id"])
+    state.load_devices()
+    return f"saved device #{device_id}"
+
+
 ACTIONS = {
     "guest_power": (prep_power, exec_power),
     "set_guest_memory": (prep_memory, exec_memory),
@@ -180,6 +197,7 @@ ACTIONS = {
     "add_to_firewall_alias": (prep_alias, exec_alias),
     "set_firewall_rule_enabled": (prep_rule_toggle, exec_rule_toggle),
     "set_ipsec_tunnel_enabled": (prep_tunnel_toggle, exec_tunnel_toggle),
+    "save_device": (prep_device, exec_device),
 }
 
 # Actions the dashboard buttons may run directly (the user clicks, then confirms in the browser).
