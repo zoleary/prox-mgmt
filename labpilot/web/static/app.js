@@ -193,9 +193,11 @@ renderers.ipam = async () => {
 
 // ---------- inventory ----------
 let pendingDevice = null;  // prefill from the IP addresses tab
+let KINDS = [];
 
 renderers.inventory = async () => {
   const { devices, kinds } = await api("/devices");
+  KINDS = kinds;
   const statusCell = (d) => !d.check_port ? '<span class="muted">not checked</span>'
     : !d.status ? '<span class="muted">waiting…</span>'
     : d.status.up ? `<span class="ok">up</span> <span class="muted">${ago(d.status.since)}</span>`
@@ -206,6 +208,7 @@ renderers.inventory = async () => {
     <td>${d.check_port ? `<span class="mono">:${d.check_port}</span> ` : ""}${statusCell(d)}</td>
     <td class="nowrap"><button class="small edit-dev" data-id="${d.id}">Edit</button> <button class="small danger del-dev" data-id="${d.id}">Delete</button></td></tr>`).join("");
   $("#inventory").innerHTML = `
+    <div class="card" id="discover-card"></div>
     <div class="card" id="dev-form-card">
       <h3 id="dev-form-title">Add a device</h3>
       <form id="dev-form" class="dev-form">
@@ -245,6 +248,7 @@ renderers.inventory = async () => {
       render("inventory");
     } catch (err) { toast(err.message, "critical"); }
   };
+  renderDiscovery();
   const byId = Object.fromEntries(devices.map((d) => [d.id, d]));
   document.querySelectorAll("#inventory .edit-dev").forEach((b) => (b.onclick = () => { fill(byId[b.dataset.id]); window.scrollTo(0, 0); }));
   document.querySelectorAll("#inventory .del-dev").forEach((b) => (b.onclick = async () => {
@@ -253,6 +257,122 @@ renderers.inventory = async () => {
     try { await api(`/devices/${d.id}`, { method: "DELETE" }); toast(`Deleted ${d.name}`, "ok"); render("inventory"); }
     catch (err) { toast(err.message, "critical"); }
   }));
+};
+
+// ---------- discovery ----------
+let discoveryTimer = null;
+
+async function renderDiscovery() {
+  const card = $("#discover-card");
+  if (!card) return;
+  const d = await api("/discovery");
+  const pctDone = d.total ? Math.round((d.done / d.total) * 100) : 0;
+  const fresh = d.results.filter((r) => !r.in_inventory);
+  const rows = d.results.map((r, i) => `<tr class="${r.in_inventory ? "muted" : ""}">
+    <td>${r.in_inventory ? "" : `<input type="checkbox" class="disc-pick" data-i="${i}" checked>`}</td>
+    <td class="mono">${esc(r.ip)}</td>
+    <td><input class="disc-name" data-i="${i}" value="${esc(r.in_inventory || r.suggested_name)}" ${r.in_inventory ? "disabled" : ""}></td>
+    <td>${r.in_inventory ? `<span class="muted">in inventory</span>` : `<select class="disc-kind" data-i="${i}">${KINDS.map((k) => `<option ${k === r.kind ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
+    <td>${esc(r.role || "")}</td>
+    <td class="mono">${esc(r.mac || "")}</td>
+    <td>${r.services.map((x) => `<span class="pill">${esc(x)}</span>`).join(" ")}</td>
+    <td>${r.sources.map((x) => `<span class="pill">${esc(x)}</span>`).join(" ")}</td></tr>`).join("");
+  card.innerHTML = `<h3>Discover devices</h3>
+    <div class="muted" style="margin-bottom:8px">Scans your subnets for devices answering on common ports (SSH, web, Proxmox, SMB, NAS, printers…) and merges what pfSense, DHCP and Proxmox already see. Nothing is changed on the devices.</div>
+    <div class="actions-row">
+      <input id="disc-subnets" class="filter" style="width:360px;margin:0" placeholder="Subnets, e.g. 10.0.0.0/24, 192.168.1.0/24"
+        value="${esc((d.subnets.length ? d.subnets : d.suggested_subnets).join(", "))}">
+      <button id="disc-go" class="approve" ${d.running ? "disabled" : ""}>${d.running ? "Scanning…" : "Scan"}</button>
+      ${d.running ? `<span class="muted">${pctDone}%</span>` : d.finished ? `<span class="muted">Last scan ${ago(d.finished)}${ago(d.finished) === "just now" ? "" : " ago"}: ${d.results.length} found, ${fresh.length} new</span>` : ""}
+    </div>
+    ${d.running ? `<div class="bar"><div class="bg-info" style="width:${pctDone}%"></div></div>` : ""}
+    ${d.error ? `<div class="finding critical"><span>${esc(d.error)}</span></div>` : ""}
+    ${!d.running && d.results.length ? `<div class="actions-row" style="margin:10px 0 6px">
+        <button id="disc-add" class="approve">Add selected to inventory</button>
+        <button id="disc-all" class="small">Select all</button> <button id="disc-none" class="small">Select none</button>
+        <span class="muted">Edit names and types first if you like.</span></div>
+      <div style="overflow-x:auto"><table><tr><th></th><th>IP</th><th>Name</th><th>Type</th><th>Guess</th><th>MAC</th><th>Services</th><th>Seen by</th></tr>${rows}</table></div>` : ""}`;
+
+  $("#disc-go").onclick = async () => {
+    const subnets = $("#disc-subnets").value.split(/[\s,]+/).filter(Boolean);
+    try { await api("/discovery", { method: "POST", body: JSON.stringify({ subnets }) }); renderDiscovery(); }
+    catch (e) { toast(e.message, "critical"); }
+  };
+  clearTimeout(discoveryTimer);
+  if (d.running) discoveryTimer = setTimeout(() => current() === "inventory" && renderDiscovery(), 1500);
+  if (!d.running && d.results.length) {
+    const pick = (on) => document.querySelectorAll(".disc-pick").forEach((c) => (c.checked = on));
+    $("#disc-all").onclick = () => pick(true);
+    $("#disc-none").onclick = () => pick(false);
+    $("#disc-add").onclick = async () => {
+      const chosen = [...document.querySelectorAll(".disc-pick:checked")].map((c) => {
+        const i = c.dataset.i, r = d.results[i];
+        return { name: $(`.disc-name[data-i="${i}"]`).value, kind: $(`.disc-kind[data-i="${i}"]`).value, ip: r.ip,
+                 mac: r.mac, role: r.role, check_port: r.check_port,
+                 notes: r.services.length ? "Discovered: " + r.services.join(", ") : "Discovered" };
+      });
+      if (!chosen.length) return toast("Nothing selected");
+      try {
+        const res = await api("/devices/bulk", { method: "POST", body: JSON.stringify({ devices: chosen }) });
+        toast(`Added ${res.added.length}` + (res.skipped.length ? `, skipped ${res.skipped.length} already listed` : "") +
+          (res.errors.length ? `, ${res.errors.length} errors: ${res.errors.join("; ")}` : ""), res.errors.length ? "critical" : "ok");
+        render("inventory");
+      } catch (e) { toast(e.message, "critical"); }
+    };
+  }
+}
+
+// ---------- network diagram ----------
+const ICONS = { firewall: "🧱", router: "🌐", switch: "🔀", "access point": "📡", hypervisor: "🏗️", server: "🖥️",
+  nas: "🗄️", vm: "💠", container: "📦", iot: "💡", workstation: "💻", printer: "🖨️", other: "🔹", unknown: "❔" };
+
+function hostChip(h) {
+  const dot = h.status === "up" ? "ok" : h.status === "down" ? "critical" : "muted";
+  const guests = h.guests && h.guests.length ? `<div class="guests">${h.guests.map((g) =>
+    `<span class="gchip ${g.status === "running" ? "" : "stopped"}" title="${esc(g.type === "qemu" ? "VM" : "CT")} ${g.vmid} · ${esc(g.status)}">${g.type === "qemu" ? "💠" : "📦"} ${esc(g.label)}</span>`).join("")}</div>` : "";
+  return `<div class="host ${h.kind}">
+    <div class="host-top"><span class="icon">${ICONS[h.kind] || "🔹"}</span><b>${esc(h.label)}</b>${h.status ? `<span class="dot bg-${dot}" title="${esc(h.status)}"></span>` : ""}</div>
+    <div class="muted mono">${esc(h.ip || "no IP")}</div>${h.role ? `<div class="muted">${esc(h.role)}</div>` : ""}${guests}</div>`;
+}
+
+function toMermaid(t) {
+  const id = (s) => "n_" + String(s).replace(/[^A-Za-z0-9]/g, "_");
+  const q = (s) => String(s ?? "").replace(/"/g, "'");
+  const out = ["flowchart TD", `  internet(("Internet"))`, `  fw["${q(t.firewall.name)} (firewall)"]`, "  internet --> fw"];
+  for (const n of t.networks) {
+    out.push(`  subgraph ${id(n.cidr)}["${q(n.name)} ${n.cidr}"]`);
+    for (const h of n.hosts) out.push(`    ${id(h.ip)}["${q(h.label)}<br/>${h.ip}"]`);
+    out.push("  end", `  fw --> ${id(n.cidr)}`);
+  }
+  return out.join("\n");
+}
+
+renderers.network = async () => {
+  const t = await api("/topology");
+  const wan = t.wan.length ? t.wan.map((g) => `<div class="muted">${esc(g.name)} · ${esc(g.status || "?")}</div>`).join("") : '<div class="muted">WAN</div>';
+  const nets = t.networks.map((n) => `<div class="net">
+      <div class="net-head"><b>${esc(n.name)}</b> <span class="mono muted">${esc(n.cidr)}</span>
+        ${n.gateway ? `<div class="muted">gateway ${esc(n.gateway)}</div>` : ""}<div class="muted">${n.hosts.length} host${n.hosts.length === 1 ? "" : "s"}</div></div>
+      <div class="hosts">${n.hosts.map(hostChip).join("") || '<div class="muted">Nothing seen yet</div>'}</div></div>`).join("");
+  $("#network").innerHTML = `
+    <div class="actions-row" style="margin-bottom:12px">
+      <button id="net-mermaid" class="small">Copy as Mermaid</button>
+      <span class="muted">Built from pfSense, Proxmox, DHCP and your inventory. Add devices on the Inventory tab (or run Discover) to fill it in.</span>
+    </div>
+    <div class="topo">
+      <div class="tier"><div class="node-box internet">☁️ <b>Internet</b>${wan}</div></div>
+      <div class="vline"></div>
+      <div class="tier"><div class="node-box fw">🧱 <b>${esc(t.firewall.name)}</b><div class="muted">${t.firewall.connected ? "firewall / router" : "pfSense not connected"}</div></div></div>
+      <div class="vline"></div>
+      ${t.networks.length ? `<div class="nets">${nets}</div>` : '<div class="muted" style="text-align:center">No subnets known yet. Connect pfSense or set EXTRA_SUBNETS in .env.</div>'}
+      ${t.other.length ? `<h2>Not in a known subnet</h2><div class="hosts loose">${t.other.map(hostChip).join("")}</div>` : ""}
+    </div>`;
+  $("#net-mermaid").onclick = () => {
+    const text = toMermaid(t);
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    toast("Mermaid diagram copied. Paste it into Obsidian, GitHub or mermaid.live", "ok");
+  };
 };
 
 // ---------- firewall ----------

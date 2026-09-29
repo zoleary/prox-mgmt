@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__, actions, inventory
+from .discovery import Discovery
 from .analysis.memory import can_fit
 from .chat import ChatService
 from .config import get_settings
@@ -29,6 +30,7 @@ db = DB(settings.data_dir)
 state = LabState(settings, build_integrations(settings), db)
 chat = ChatService(settings, state, db)
 security = HTTPBasic()
+discovery = Discovery()
 
 
 def require_user(creds: HTTPBasicCredentials = Depends(security)) -> str:
@@ -160,6 +162,54 @@ def delete_device(device_id: int):
     state.load_devices()
     state.device_status.pop(device_id, None)
     return {"ok": True}
+
+
+@api.get("/topology")
+def topology():
+    return state.topology()
+
+
+@api.get("/discovery")
+def discovery_status():
+    suggested = [s["cidr"] for s in state.ipam()["subnets"]]
+    return {**discovery.status(), "suggested_subnets": suggested}
+
+
+class DiscoverIn(BaseModel):
+    subnets: list[str]
+
+
+@api.post("/discovery")
+def discovery_start(body: DiscoverIn):
+    try:
+        return discovery.start(body.subnets, state.ipam()["addresses"], state.devices)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class BulkDevicesIn(BaseModel):
+    devices: list[dict]
+
+
+@api.post("/devices/bulk")
+def add_devices(body: BulkDevicesIn):
+    """Add discovered devices. Skips any whose IP is already in the inventory."""
+    have = {d["ip"] for d in db.list_devices() if d.get("ip")}
+    added, skipped, errors = [], [], []
+    for raw in body.devices[:500]:
+        try:
+            clean = inventory.clean_device(raw)
+        except ValueError as e:
+            errors.append(f"{raw.get('name') or raw.get('ip')}: {e}")
+            continue
+        if clean["ip"] and clean["ip"] in have:
+            skipped.append(clean["name"])
+            continue
+        db.save_device(clean)
+        have.add(clean["ip"])
+        added.append(clean["name"])
+    state.load_devices()
+    return {"added": added, "skipped": skipped, "errors": errors}
 
 
 @api.get("/metrics")

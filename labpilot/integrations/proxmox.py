@@ -128,9 +128,10 @@ class Proxmox(Integration):
 
     def collect(self) -> dict:
         cluster_status = self.api.cluster.status.get()
+        node_ips = {c.get("name"): c.get("ip") for c in cluster_status if c.get("type") == "node"}
         nodes = []
         for n in self.api.nodes.get():
-            entry = {"node": n["node"], "status": n.get("status"), "maxcpu": n.get("maxcpu")}
+            entry = {"node": n["node"], "status": n.get("status"), "maxcpu": n.get("maxcpu"), "ip": node_ips.get(n["node"])}
             if n.get("status") == "online":
                 st = self.api.nodes(n["node"]).status.get()
                 entry.update(
@@ -146,7 +147,8 @@ class Proxmox(Integration):
                 )
             nodes.append(entry)
 
-        guests, observations = [], []
+        guests = []
+        observations = [Observation(n["ip"], "proxmox-node", None, n["node"], "Proxmox node") for n in nodes if n.get("ip")]
         for r in self.api.cluster.resources.get(type="vm"):
             if r.get("template"):
                 continue

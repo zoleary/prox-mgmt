@@ -8,6 +8,7 @@ from . import inventory
 from .analysis.alerts import build_alerts, track_since
 from .analysis.ipam import build_inventory, build_subnets
 from .analysis.memory import memory_report
+from .analysis.topology import build_topology
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,13 @@ class LabState:
             if str(g["vmid"]) == ref or (g.get("name") or "").lower() == ref.lower():
                 return g
         raise ValueError(f"no guest with id or name {ref!r}")
+
+    def topology(self) -> dict:
+        ipam = self.ipam()
+        pf = self.raw.get("pfsense", {})
+        return build_topology(subnets=ipam["subnets"], addresses=ipam["addresses"], devices=self.devices,
+                              device_status=self.device_status, nodes=self.nodes, guests=self.guests,
+                              pf_system=pf.get("system"), gateways=pf.get("gateways", []))
 
     def devices_with_status(self) -> list[dict]:
         return [{**d, "status": self.device_status.get(d["id"])} for d in self.devices]

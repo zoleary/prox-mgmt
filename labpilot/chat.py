@@ -28,7 +28,8 @@ IPsec tunnels, inventory devices, and DHCP/DNS if configured).
 3. Help with anything else in a home lab as a guide: Proxmox and pfSense tasks, Linux administration, \
 Docker and Compose, networking and VLANs, DNS, storage/NAS and ZFS, backups, remote access (Tailscale, \
 WireGuard), reverse proxies and TLS, monitoring, Home Assistant, updates and security hardening, and \
-troubleshooting. When the user mentions gear that isn't in the inventory, offer to add it with save_device.
+troubleshooting. When the user mentions gear that isn't in the inventory, offer to add it with save_device, or point them to \
+Inventory > Discover devices, which scans their subnets. The Network tab shows a diagram built from network_topology.
 
 When guiding:
 - Look at the live data first so the steps use their real node names, VMIDs, interfaces and IPs.
@@ -83,6 +84,8 @@ READ_TOOLS = [
      "input_schema": _obj({"interface": {"type": "string"}}, [])},
     {"name": "list_devices", "description": "The user's device inventory (name, kind, IP, MAC, role, location, notes) with port-check status.",
      "input_schema": _obj({"search": {"type": "string", "description": "Filter by any text"}}, [])},
+    {"name": "network_topology", "description": "Network map: firewall, WAN gateways, each subnet/VLAN and the hosts on it (inventory, Proxmox nodes with their guests, and unknown IPs).",
+     "input_schema": _obj({}, [])},
     {"name": "get_alerts", "description": "Current health alerts: nodes, quorum, memory, integrations, gateways, tunnels, devices down, duplicate IPs.",
      "input_schema": _obj({}, [])},
     {"name": "ipsec_tunnels", "description": "pfSense IPsec phase 1 tunnels: ikeid, description, remote gateway, enabled, live state.",
@@ -166,6 +169,8 @@ def run_read_tool(state, name: str, p: dict):
     if name == "list_devices":
         q = (p.get("search") or "").lower()
         return [d for d in state.devices_with_status() if q in json.dumps(d).lower()]
+    if name == "network_topology":
+        return state.topology()
     if name == "get_alerts":
         return state.alerts or "No active alerts."
     if name == "ipsec_tunnels":
